@@ -2,31 +2,27 @@
 """
 Reddit → Telegram Bot (RSS edition)
 Polls subreddit RSS feeds for new posts — no API key, no OAuth, no 403s.
+Includes a minimal HTTP health-check server so Railway never spins it down.
 """
 
 import os
 import json
 import time
 import logging
+import threading
 import requests
 import xml.etree.ElementTree as ET
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 # ── Configuration ────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_CHAT_ID_HERE")
-
-# Subreddits to watch (without r/)
-SUBREDDITS = os.getenv("SUBREDDITS", "Python,programming,worldnews").split(",")
-
-# How often to check (seconds)
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "120"))
-
-# How many posts to fetch per subreddit per check (max 25 for RSS)
-POSTS_PER_CHECK = int(os.getenv("POSTS_PER_CHECK", "10"))
-
-# File that stores already-seen post IDs so duplicates are never sent
-SEEN_FILE = Path(os.getenv("SEEN_FILE", "seen_posts.json"))
+SUBREDDITS       = os.getenv("SUBREDDITS", "Python,programming,worldnews").split(",")
+POLL_INTERVAL    = int(os.getenv("POLL_INTERVAL", "120"))
+POSTS_PER_CHECK  = int(os.getenv("POSTS_PER_CHECK", "10"))
+SEEN_FILE        = Path(os.getenv("SEEN_FILE", "seen_posts.json"))
+PORT             = int(os.getenv("PORT", "8080"))  # Railway injects $PORT
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -35,6 +31,22 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+# ── Health-check server (keeps Railway alive) ─────────────────────────────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, *args):
+        pass  # silence access logs
+
+
+def start_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    log.info("Health-check server listening on port %d", PORT)
+    server.serve_forever()
 
 # ── Seen-posts store ──────────────────────────────────────────────────────────
 def load_seen() -> set:
@@ -65,7 +77,6 @@ _session.headers.update({
 
 
 def fetch_new_posts(subreddit: str, limit: int = 10) -> list[dict]:
-    """Fetch latest posts from a subreddit RSS feed."""
     url = f"https://www.reddit.com/r/{subreddit}/new/.rss?limit={limit}"
     try:
         r = _session.get(url, timeout=15)
@@ -77,7 +88,6 @@ def fetch_new_posts(subreddit: str, limit: int = 10) -> list[dict]:
 
 
 def parse_rss(xml_text: str, subreddit: str) -> list[dict]:
-    """Parse Reddit Atom RSS feed into a list of post dicts."""
     posts = []
     try:
         root = ET.fromstring(xml_text)
@@ -89,14 +99,7 @@ def parse_rss(xml_text: str, subreddit: str) -> list[dict]:
             link    = entry.find("atom:link", RSS_NS)
             url     = link.get("href", "") if link is not None else ""
             author  = entry.findtext("atom:author/atom:name", default="unknown", namespaces=RSS_NS)
-
-            posts.append({
-                "id":        post_id,
-                "title":     title,
-                "url":       url,
-                "author":    author,
-                "subreddit": subreddit,
-            })
+            posts.append({"id": post_id, "title": title, "url": url, "author": author, "subreddit": subreddit})
     except ET.ParseError as exc:
         log.warning("RSS parse error for r/%s: %s", subreddit, exc)
     return posts
@@ -105,12 +108,7 @@ def parse_rss(xml_text: str, subreddit: str) -> list[dict]:
 # ── Telegram helpers ──────────────────────────────────────────────────────────
 def send_telegram(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False}
     try:
         r = requests.post(url, json=payload, timeout=15)
         r.raise_for_status()
@@ -121,28 +119,18 @@ def send_telegram(text: str) -> bool:
 
 
 def format_post(post: dict) -> str:
-    title     = post["title"]
-    author    = post["author"]
-    subreddit = post["subreddit"]
-    url       = post["url"]
-
+    url = post["url"]
     is_comments = "reddit.com/r/" in url and "/comments/" in url
-    link_line = (
-        f'<a href="{url}">💬 View post</a>'
-        if is_comments
-        else f'<a href="{url}">🔗 Link</a>'
-    )
-
-    return (
-        f"<b>r/{subreddit}</b>\n"
-        f"<b>{title}</b>\n"
-        f"👤 {author}\n"
-        f"{link_line}"
-    )
+    link_line = f'<a href="{url}">💬 View post</a>' if is_comments else f'<a href="{url}">🔗 Link</a>'
+    return f"<b>r/{post['subreddit']}</b>\n<b>{post['title']}</b>\n👤 {post['author']}\n{link_line}"
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main() -> None:
+    # Start health-check server in a background thread
+    t = threading.Thread(target=start_health_server, daemon=True)
+    t.start()
+
     log.info("Starting Reddit → Telegram bot (RSS mode)")
     log.info("Watching: %s", ", ".join(f"r/{s}" for s in SUBREDDITS))
     log.info("Poll interval: %d s", POLL_INTERVAL)
@@ -166,8 +154,7 @@ def main() -> None:
                 if pid in seen:
                     continue
                 seen.add(pid)
-                msg = format_post(post)
-                if send_telegram(msg):
+                if send_telegram(format_post(post)):
                     log.info("Sent: [r/%s] %s", sub, post["title"][:60])
                     new_count += 1
                 time.sleep(0.5)
