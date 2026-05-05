@@ -1,0 +1,19 @@
+[Unit]
+Description=Reddit → Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ── Change these two paths to match your setup ──
+WorkingDirectory=/opt/reddit-telegram-bot
+EnvironmentFile=/opt/reddit-telegram-bot/.env
+ExecStart=/usr/bin/python3 /opt/reddit-telegram-bot/bot.py
+# ────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
