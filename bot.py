@@ -102,7 +102,7 @@ if proxy := os.getenv("PROXY_URL"):
 
 
 def fetch_new_posts(subreddit: str, limit: int = 10) -> list[dict]:
-    url = f"https://www.reddit.com/r/{subreddit}/new/.rss?limit={limit}"
+    url = f"http://www.reddit.com/r/{subreddit}/new/.rss?limit={limit}"
     try:
         r = _session.get(url, timeout=15)
         r.raise_for_status()
