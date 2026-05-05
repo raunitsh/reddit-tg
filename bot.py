@@ -96,6 +96,9 @@ _session.headers.update({
     "User-Agent": "Mozilla/5.0 (compatible; rss-reader/1.0)",
     "Accept": "application/rss+xml, application/xml, text/xml",
 })
+if proxy := os.getenv("PROXY_URL"):
+    _session.proxies = {"http": proxy, "https": proxy}
+    log.info("Using proxy: %s", proxy)
 
 
 def fetch_new_posts(subreddit: str, limit: int = 10) -> list[dict]:
