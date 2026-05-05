@@ -56,12 +56,16 @@ def save_seen(seen: set) -> None:
 
 
 # ── Reddit helpers ────────────────────────────────────────────────────────────
-REDDIT_HEADERS = {"User-Agent": "reddit-telegram-bot/1.0 (by /u/telegrambot)"}
+REDDIT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
 def fetch_new_posts(subreddit: str, limit: int = 10) -> list[dict]:
     """Return the latest posts from a subreddit via the public JSON API."""
-    url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}"
+    url = f"https://old.reddit.com/r/{subreddit}/new.json?limit={limit}"
     try:
         r = requests.get(url, headers=REDDIT_HEADERS, timeout=15)
         r.raise_for_status()
